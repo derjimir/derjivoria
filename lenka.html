@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Беги, Лёня!</title>
+<style>
+  :root{
+    --sky:#eaf7ee; --hill1:#cfe9d3; --hill2:#a8d0b8;
+    --treesFar:#8ec3a5; --treesMid:#6ea68d; --treesNear:#4e8871;
+    --ground:#c8b28a;
+    --night-sky:#0f1f3a;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--sky);color:#243428;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{height:100dvh;display:grid;place-items:center;position:relative}
+
+  #title{
+    position:fixed; left:50%; top:15vh; transform:translateX(-50%);
+    font:900 46px/1 system-ui, Segoe UI, Roboto, Arial;
+    color:#6b4a32;
+    text-shadow:2px 2px 0 #000,-2px 2px 0 #000,2px -2px 0 #000,-2px -2px 0 #000,0 6px 12px rgba(0,0,0,.25);
+    pointer-events:none; z-index:9;
+  }
+  .bounce{ animation:bounce 1.05s infinite }
+  @keyframes bounce{ 0%,100%{ transform:translate(-50%,0) } 50%{ transform:translate(-50%,-7px) } }
+
+  canvas{touch-action:manipulation;background:var(--sky);
+    border:2px solid #2a3;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+  .hud{position:fixed;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:10px;pointer-events:none;font-weight:800;z-index:8}
+  .badge{background:#ffffffd9;color:#102015;padding:.45rem .7rem;border-radius:12px}
+  .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35);padding:16px;z-index:10}
+  .panel{background:#fff;padding:18px;border-radius:16px;max-width:560px;width:min(92vw,560px);text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+  .btn{appearance:none;border:none;background:#4b7f4b;color:#fff;padding:.65rem 1rem;border-radius:12px;font-weight:800;box-shadow:0 4px 0 #2f5a2f;cursor:pointer}
+  .btn:active{transform:translateY(2px); box-shadow:0 2px 0 #2f5a2f}
+
+  #goBack{position:fixed;inset:0;display:none;z-index:11}
+  #goShot{position:absolute;inset:0;background-position:center;background-size:cover;filter:blur(3px) brightness(.9)}
+  #goCard{position:relative;margin:auto;background:#ffffffee;border-radius:16px;max-width:560px;width:min(92vw,560px);padding:16px 18px;box-shadow:0 10px 30px rgba(0,0,0,.4);top:15%}
+  h1{margin:.2rem 0 .6rem;font-size:1.3rem}
+  .quips{font-style:italic;margin:.4rem 0 .8rem}
+</style>
+</head>
+<body>
+<div id="title" class="bounce">Беги, Лёня!</div>
+
+<div class="wrap">
+  <canvas id="game" width="960" height="420" aria-label="Лёнька‑Раннер"></canvas>
+</div>
+
+<div class="hud" aria-live="polite">
+  <div class="badge">Счёт: <span id="score">0</span></div>
+  <div class="badge">Рекорд: <span id="best">0</span></div>
+  <div class="badge">Скорость: <span id="spd">1.0×</span></div>
+</div>
+
+<!-- старт -->
+<div class="overlay" id="start">
+  <div class="panel">
+    <p style="font-weight:800;margin:.2rem 0 .6rem;">Тапни по экрану или пробел — чтобы начать</p>
+
+<p>Лёнька торопится в бар «Ельник», но по дороге нужно слегка поднакидаться. Собирай бутылки, обходи препятствия и не пропускай пакеты с чипсами.</p>
+    <button class="btn" id="playBtn">Играть</button>
+  </div>
+</div>
+
+<!-- конец игры -->
+<div id="goBack">
+  <div id="goShot"></div>
+  <div id="goCard">
+    <h1>Конец забега</h1>
+    <p class="quips" id="quip">Лёня споткнулся, но бутылка уцелела!</p>
+    <p id="summary">Счёт: 0 · Рекорд: 0</p>
+    <button class="btn" id="retryBtn">Ещё раз</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d');
+
+  /* ---------- размер/скейл ---------- */
+  const BASE = {w:960, h:420};
+  const SCALE = {x:1,y:1};
+  function fit(){
+    const w = Math.max(360, Math.min(980, Math.round(innerWidth*0.96)));
+    const h = Math.round(w * (BASE.h/BASE.w));
+    const ratio = Math.min(2, devicePixelRatio || 1);
+    cvs.style.width = w+'px'; cvs.style.height = h+'px';
+    cvs.width = Math.round(w*ratio); cvs.height = Math.round(h*ratio);
+    SCALE.x = cvs.width/BASE.w; SCALE.y = cvs.height/BASE.h;
+  }
+  addEventListener('resize', fit, {passive:true}); fit();
+
+  /* ---------- UI ---------- */
+  const titleEl = document.getElementById('title');
+  const startOv = document.getElementById('start');
+  const playBtn = document.getElementById('playBtn');
+  const goBack  = document.getElementById('goBack');
+  const goShot  = document.getElementById('goShot');
+  const retryBtn= document.getElementById('retryBtn');
+  const summary = document.getElementById('summary');
+  const quipEl  = document.getElementById('quip');
+  const scoreEl=document.getElementById('score');
+  const bestEl =document.getElementById('best');
+  const spdEl  =document.getElementById('spd');
+
+  const store = {
+    get best(){ return +localStorage.getItem('lenka_best')||0; },
+    set best(v){ localStorage.setItem('lenka_best', v); }
+  };
+  bestEl.textContent = store.best;
+
+  const QUIPS = [
+    "Лёня споткнулся, но бутылка уцелела!",
+    "Держиворовка пролилась… но не вся!",
+    "Гномы смеются, а Лёня — нет.",
+    "Коряга победила, но честь Лёньки цела."
+  ];
+
+  /* ---------- геометрия/примитивы (ранее по коду, чтобы не падать) ---------- */
+  function rectRect(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+  function pointInRect(P,R){ return P.x>=R.x && P.x<=R.x+R.w && P.y>=R.y && P.y<=R.y+R.h; }
+  function pointInTri(P,A,B,C){
+    const area=(v1,v2,v3)=>Math.abs((v1.x*(v2.y-v3.y)+v2.x*(v3.y-v1.y)+v3.x*(v1.y-v2.y))/2);
+    const S=area(A,B,C), S1=area(P,B,C), S2=area(A,P,C), S3=area(A,B,P);
+    return Math.abs(S-(S1+S2+S3)) < 0.01;
+  }
+  function segmentsIntersect(p1,p2,q1,q2){
+    const o=(a,b,c)=>Math.sign((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x));
+    const o1=o(p1,p2,q1), o2=o(p1,p2,q2), o3=o(q1,q2,p1), o4=o(q1,q2,p2);
+    function onSeg(a,b,p){ return Math.min(a.x,b.x)<=p.x && p.x<=Math.max(a.x,b.x) && Math.min(a.y,b.y)<=p.y && p.y<=Math.max(a.y,b.y); }
+    if(o1===0 && onSeg(p1,p2,q1)) return true;
+    if(o2===0 && onSeg(p1,p2,q2)) return true;
+    if(o3===0 && onSeg(q1,q2,p1)) return true;
+    if(o4===0 && onSeg(q1,q2,p2)) return true;
+    return (o1!==o2 && o3!==o4);
+  }
+  function triRectOverlap(A,B,C, R){
+    const minX=Math.min(A.x,B.x,C.x), maxX=Math.max(A.x,B.x,C.x);
+    const minY=Math.min(A.y,B.y,C.y), maxY=Math.max(A.y,B.y,C.y);
+    if(R.x>maxX || R.x+R.w<minX || R.y>maxY || R.y+R.h<minY) return false;
+    const corners = [
+      {x:R.x, y:R.y}, {x:R.x+R.w, y:R.y},
+      {x:R.x, y:R.y+R.h}, {x:R.x+R.w, y:R.y+R.h}
+    ];
+    for(const P of corners){ if(pointInTri(P,A,B,C)) return true; }
+    const triPts=[A,B,C]; for(const P of triPts){ if(pointInRect(P,R)) return true; }
+    const edgesTri=[[A,B],[B,C],[C,A]];
+    const edgesRect=[
+      [{x:R.x,y:R.y},{x:R.x+R.w,y:R.y}],
+      [{x:R.x+R.w,y:R.y},{x:R.x+R.w,y:R.y+R.h}],
+      [{x:R.x+R.w,y:R.y+R.h},{x:R.x,y:R.y+R.h}],
+      [{x:R.x,y:R.y+R.h},{x:R.x,y:R.y}]
+    ];
+    for(const [p1,p2] of edgesTri){ for(const [q1,q2] of edgesRect){ if(segmentsIntersect(p1,p2,q1,q2)) return true; } }
+    return false;
+  }
+  function getVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name); }
+  function roundRect(x,y,w,h,r,fill=true){ const rr=Math.min(r,w/2,h/2);
+    ctx.beginPath(); ctx.moveTo(x+rr,y);
+    ctx.arcTo(x+w,y,x+w,y+h,rr); ctx.arcTo(x+w,y+h,x,y+h,rr);
+    ctx.arcTo(x,y+h,x,y,rr); ctx.arcTo(x,y,x+w,y,rr);
+    if(fill) ctx.fill(); else ctx.stroke();
+  }
+  function circle(x,y,r){ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
+  function ellipse(x,y,rx,ry){ ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2); ctx.fill(); }
+  function triangle(x, y, w, h){ ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x+w*0.5, y-h); ctx.lineTo(x+w, y); ctx.closePath(); ctx.fill(); }
+
+  /* ---------- состояние ---------- */
+  const G = {
+    groundY: 336,
+    baseSpeed: 300,
+    speed: 300,
+    accel: 0.010,              // медленный рост
+    time: 0,
+    running:false, over:false,
+    score: 0, best: store.best,
+    level: 0,
+    spawnedLevels: new Set(),  // чипсы 1 раз на уровень
+    spawnedSigns: new Set(),   // "Ельник" 1 раз на уровень
+    spawnedOwls: new Set(),    // сова 1 раз на уровень (только ночью)
+    rnd:(a,b)=>Math.random()*(b-a)+a
+  };
+
+  /* ---------- фоны/параллаксы ---------- */
+  const clouds = Array.from({length:6},()=>({x:Math.random()*BASE.w, y:20+Math.random()*120, s:.6+Math.random()*0.6}));
+  function layer(speed) { return {speed, trees:[]}; }
+  const layers = [ layer(0.25), layer(0.45), layer(0.7) ];
+  layers.forEach((L, idx)=>{
+    const count = 12+idx*3;
+    for(let i=0;i<count;i++){
+      L.trees.push({x: Math.random()*BASE.w, h: 70+idx*20 + Math.random()*30});
+    }
+  });
+
+  /* ---------- ночь/день ---------- */
+  let nightFactor = 0; // 0=день, 1=ночь (плавно)
+  const stars = Array.from({length: 26}, ()=>({
+    x: Math.random()*BASE.w, y: Math.random()*200 + 20,
+    r: Math.random()*1.8 + 0.6,
+    tw: Math.random()*1.5 + 0.5, // скорость мерцания
+    a: Math.random()*Math.PI*2,
+    dx: (Math.random()*0.6-0.3), // собственное медленное движение
+    dy: (Math.random()*0.3-0.15)
+  }));
+
+  function isNightLevel(lv){
+    // 0..1 — день, 2..3 — ночь, дальше цикл
+    const ph = (lv%4+4)%4;
+    return ph>=2;
+  }
+
+  /* ---------- игрок: Лёня (отрисовка ниже, как согласовано) ---------- */
+
+const player = {
+  x: 130, y: G.groundY, w: 54, h: 76,
+  vy:0, gravity: 1750, jumpV: 560, grounded:true,
+  pickedTimer:0, pickedTimerMax:0.45, runT:0,
+
+  jump(){ if(this.grounded){ this.vy = -this.jumpV; this.grounded=false; } },
+  rect(){ return {x:this.x, y:this.y-this.h, w:this.w, h:this.h}; },
+
+  update(dt){
+    this.vy += this.gravity*dt;
+    this.y  += this.vy*dt;
+    if(this.y>G.groundY){ this.y=G.groundY; this.vy=0; this.grounded=true; }
+
+    if(this.pickedTimer>0){ this.pickedTimer -= dt; if(this.pickedTimer<0) this.pickedTimer=0; }
+    if(this.grounded && G.running) this.runT += dt*10;
+  },
+
+  draw(){
+    const x=this.x, y=this.y-this.h;
+    ctx.save(); ctx.translate(x,y);
+
+    // тень
+    ctx.globalAlpha=.25; ctx.fillStyle='#000';
+    ellipse(this.w*0.45, this.h+7, this.w*0.7, 10);
+    ctx.globalAlpha=1;
+
+    const frame = this.grounded ? Math.floor(this.runT)%3 : 1;
+
+    // палитра (брови/усы/борода светлее — темно‑русые)
+    const pal = {
+      skin:'#f1d1a4', skinDark:'#e3bf94',
+      hat:'#5a3e2a', hatTop:'#3f2b1e', hatBand:'#3a2a1a',
+      shirt:'#e4cda8', belt:'#3a2a1a',
+      cloak:'#6b4a32',
+      wraps:'#897a67', boot:'#b48a64',
+      beard:'#6a4a2e', brow:'#4a3726', eye:'#222',
+      outline:'rgba(34,34,34,.9)'
+    };
+
+    const swing = this.grounded ? 0 : Math.max(-10, Math.min(10, -this.vy*0.03));
+
+    // ПЛАЩ — уже, у плеч скруглён
+    ctx.fillStyle = pal.cloak;
+    ctx.beginPath();
+    const shoulderW = this.w*0.78, hemW = this.w*0.92;
+    const leftX  = (this.w-shoulderW)/2 + swing*0.3;
+    const rightX = leftX + shoulderW;
+    const hemLeft  = (this.w-hemW)/2 - swing*0.2;
+    const hemRight = hemLeft + hemW;
+    ctx.moveTo(leftX+3, 28);
+    ctx.quadraticCurveTo(this.w*0.5, 24, rightX-3, 28);
+    ctx.lineTo(hemRight, this.h-8);
+    ctx.quadraticCurveTo(this.w*0.5+3, this.h-2, hemLeft, this.h-8);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = pal.outline; ctx.lineWidth = 1.4; ctx.stroke();
+
+    // РУБАХА + пояс
+    ctx.fillStyle = pal.shirt; roundRect(8, 34, this.w-16, this.h-44, 10, true);
+    ctx.fillStyle = pal.belt;  roundRect(10, this.h-30, this.w-20, 6, 3, true);
+
+    // УШИ — слегка выпирают
+    ctx.fillStyle = pal.skin;
+    circle(10, 18, 5);                // левое
+    circle(this.w-10, 18, 5);         // правое
+
+    // ГОЛОВА
+    roundRect(12, 6, this.w-24, 26, 10, true);
+
+    // ГЛАЗА: белки → зрачки → ВЕКИ (динамические) → БРОВЬ (с одним разрывом)
+    // белки
+    ctx.fillStyle = '#fff'; circle(22, 16, 6); circle(this.w-22, 16, 6);
+    // зрачки
+    ctx.fillStyle = pal.eye; circle(22, 16, 3); circle(this.w-22, 16, 3);
+
+    // веки: базовое прикрытие + опускание при подборе
+    // base=2px, extra зависит от pickedTimer
+    const t = this.pickedTimerMax>0 ? (this.pickedTimer/this.pickedTimerMax) : 0;
+    const lidOffset = 2 + Math.round(8 * t); // до 10px вниз при «кайфе»
+    ctx.fillStyle = pal.skin;                 // цвет века как кожа
+    roundRect(16, 8 + lidOffset, 12, 8, 4, true);                 // левое веко
+    roundRect(this.w-28, 8 + lidOffset, 12, 8, 4, true);          // правое веко
+    // тонкая линия по краю века для выразительности
+    ctx.fillStyle = pal.brow;
+    roundRect(16, 8 + lidOffset, 12, 2, 1, true);
+    roundRect(this.w-28, 8 + lidOffset, 12, 2, 1, true);
+
+    // БРОВЬ — единая, один разрыв по центру (уже «меньше пробел»)
+    ctx.fillStyle = pal.brow;
+    const gap = 3;
+    const leftW  = (this.w - 32 - gap) / 2;
+    const yBrow  = 9;
+    roundRect(16, yBrow, leftW, 4, 2, true);
+    roundRect(this.w - 16 - leftW, yBrow, leftW, 4, 2, true);
+
+    // нос
+    ctx.fillStyle = pal.skinDark; roundRect(this.w/2-3, 18, 6, 6, 3, true);
+
+    // усы — на 1px тоньше
+    ctx.fillStyle = pal.beard;
+    roundRect(this.w/2-9, 22, 18, 3, 2, true);
+
+    // бородка — немного шире/жирнее
+    ctx.beginPath();
+    ctx.moveTo(this.w/2-10, 27);
+    ctx.quadraticCurveTo(this.w/2, 39, this.w/2+10, 27);
+    ctx.lineTo(this.w/2+10, 25);
+    ctx.quadraticCurveTo(this.w/2, 36, this.w/2-10, 25);
+    ctx.closePath(); ctx.fillStyle = pal.beard; ctx.fill();
+
+    // ШАПКА — чуть надвинута (на 2px ниже)
+    ctx.fillStyle = pal.hat;     roundRect(10, -2, this.w-20, 12, 6, true);
+    ctx.fillStyle = pal.hatTop;  roundRect(14, -8, this.w-28, 10, 5, true);
+    ctx.fillStyle = pal.hatBand; roundRect(10,  2, this.w-20,  2, 1, true);
+
+    // РУКИ
+    ctx.fillStyle = pal.skin;
+    const armL = this.grounded ? (frame===0?46: frame===1?50:44) : 48;
+    roundRect(-6, armL, 12, 18, 4, true);
+    if(this.grounded){ roundRect(this.w-6, 48, 12, 18, 4, true); }
+    else{ roundRect(this.w-2, 2, 12, 26, 4, true); }
+
+    // НОГИ
+    ctx.fillStyle = pal.wraps; roundRect(6, this.h-16, 14, 10, 3, true); roundRect(this.w-20, this.h-16, 14, 10, 3, true);
+    ctx.fillStyle = pal.boot;
+    const n1x = this.grounded ? (frame===0?6: frame===1?8:3) : 6;
+    const n2x = this.grounded ? (frame===0?this.w-22: frame===1?this.w-24:this.w-20) : this.w-22;
+    roundRect(n1x, this.h-10, 18, 8, 4, true); roundRect(n2x, this.h-10, 18, 8, 4, true);
+
+    // индикатор «подобрал»
+    if(this.pickedTimer>0 && Math.floor(G.time*10)%2===0){ drawBottle(this.w+10, this.h*0.55, 14); }
+
+    ctx.restore();
+  }
+};
+
+
+  /* ---------- объекты мира ---------- */
+  const band = []; // полоса препятствий и пикапов
+  const bgEvents = []; // фоновые события: указатели, декор, сова
+  const TYPES = {
+    root:{ w:50, h:56, score:1, type:'root' },
+    lesh:{ w:42, h:52, score:1, type:'lesh' },
+    trap:{ w:58, h:26, score:1, type:'trap' },
+    bottle:{ w:22, h:32, score:5, type:'bottle', pickup:true },
+    chips:{  w:28, h:32, score:10, type:'chips',  pickup:true }
+  };
+
+  function spawnAt(x){
+    const r = Math.random();
+    const t = r<0.4?'root' : r<0.7?'lesh':'trap';
+    const obj = { ...TYPES[t], x, y:G.groundY };
+    // инициализация глаз для лешего
+    if(t==='lesh'){
+      obj.eye = { vx:0, vy:0, blink:0, blinkDir:0, blinkT: G.rnd(3,6), dur:0.12 };
+    }
+    band.push(obj);
+
+    // шанс на бутылку после препятствия
+    if(Math.random()<0.8){
+      band.push({ ...TYPES.bottle, x: x + 60 + G.rnd(0,40), y: G.groundY - 86 - G.rnd(-8, 32) });
+    }
+
+    // иногда — декоративные камни/грибы/корни на земле
+    if(Math.random()<0.6){
+    bgEvents.push({ type:'deco', deco: pick(['stone','mush','grass']),
+  x: x + G.rnd(20,120), y:G.groundY, speedK:0.8, w:20, h:12 });
+    }
+  }
+  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+
+  function ensureBand(){
+    let rightEdge = band.length ? band.reduce((m,o)=>Math.max(m, o.x+o.w), 0) : 0;
+    while(rightEdge < BASE.w + 360){
+      const gap = G.rnd(260, 380);
+      const x = rightEdge ? rightEdge + gap : BASE.w + G.rnd(120, 240);
+      spawnAt(x);
+      rightEdge = band.reduce((m,o)=>Math.max(m, o.x+o.w), 0);
+    }
+  }
+  ensureBand();
+
+  /* ---------- одноразовые события по уровню скорости ---------- */
+  function currentLevel(){ return Math.floor((G.speed - G.baseSpeed) / 50); }
+  function maybeSpawnChips(){
+    const lv = currentLevel();
+    if(lv>0 && !G.spawnedLevels.has(lv)){
+      const farRight = band.length ? band.reduce((m,o)=>Math.max(m, o.x+o.w), 0) : BASE.w;
+      const x = Math.max(farRight + 180, BASE.w + 240);
+      band.push({ ...TYPES.chips, x, y: G.groundY - 86 - G.rnd(-8, 32) });
+      G.spawnedLevels.add(lv);
+    }
+  }
+  function maybeSpawnYelnik(){
+    const lv = currentLevel();
+    if(!G.spawnedSigns.has(lv)){
+      const farRight = band.length ? band.reduce((m,o)=>Math.max(m, o.x+o.w), 0) : BASE.w;
+      const x = Math.max(farRight + 320, BASE.w + 420);
+      bgEvents.push({ type:'sign', x, y:G.groundY, speedK:0.9 });
+      G.spawnedSigns.add(lv);
+    }
+  }
+  function maybeSpawnOwl(){
+    const lv = currentLevel();
+    const night = isNightLevel(lv);
+    if(night && !G.spawnedOwls.has(lv)){
+      // сова пролетит сверху, задний план
+      const y = 80 + Math.random()*80;
+      bgEvents.push({ type:'owl', x: BASE.w+60, y, vx: -(120+Math.random()*60), flapT:0, speedK:0.4 });
+      G.spawnedOwls.add(lv);
+    }
+  }
+
+  /* ---------- управление ---------- */
+  const startOrJump = () => { if(!G.running){ start(); } else { player.jump(); } };
+  cvs.addEventListener('pointerdown', (e)=>{ e.preventDefault(); startOrJump(); }, {passive:false});
+  document.addEventListener('keydown', (e)=>{ if(e.code==='Space'){ e.preventDefault(); startOrJump(); }});
+  playBtn.addEventListener('click', ()=> start());
+  retryBtn.addEventListener('click', ()=>{ goBack.style.display='none'; restart(); start(); });
+
+  /* ---------- цикл ---------- */
+  let last=performance.now();
+
+  function start(){
+    startOv.style.display='none';
+    titleEl.classList.remove('bounce');
+    // стартовые значения
+    G.speed = G.baseSpeed; G.time = 0; G.level=0;
+    G.spawnedLevels.clear(); G.spawnedSigns.clear(); G.spawnedOwls.clear();
+    nightFactor = isNightLevel(0)?1:0;
+    G.running=true; last=performance.now(); requestAnimationFrame(loop);
+  }
+  function restart(){
+    band.length=0; bgEvents.length=0; ensureBand();
+    G.speed = G.baseSpeed; G.score=0; G.time=0; G.over=false; G.level=0;
+    G.spawnedLevels.clear(); G.spawnedSigns.clear(); G.spawnedOwls.clear();
+    player.x=130; player.y=G.groundY; player.vy=0; player.grounded=true; player.pickedTimer=0; player.runT=0;
+    titleEl.classList.add('bounce'); startOv.style.display='flex';
+    nightFactor = isNightLevel(0)?1:0;
+  }
+  function gameOver(){
+    G.running=false; G.over=true;
+    if(G.score>G.best){ G.best=G.score; store.best=G.best; }
+    bestEl.textContent = G.best;
+    summary.textContent = `Счёт: ${G.score} · Рекорд: ${G.best}`;
+    quipEl.textContent = QUIPS[Math.floor(Math.random()*QUIPS.length)];
+    try{ goShot.style.backgroundImage = `url(${cvs.toDataURL('image/png')})`; }catch(e){}
+    goBack.style.display='block';
+  }
+
+  function loop(now){
+    if(!G.running) return;
+    const dt = Math.min(0.033,(now-last)/1000); last=now;
+    update(dt); drawScene();
+    requestAnimationFrame(loop);
+  }
+
+  /* ---------- логика ---------- */
+  function hitEnemy(pr, o){
+    if(o.type==='lesh' || o.type==='trap'){ return rectRect(pr, {x:o.x, y:o.y-o.h, w:o.w, h:o.h}); }
+    if(o.type==='root'){
+      const A = {x:o.x, y:o.y}, B = {x:o.x+o.w, y:o.y}, C = {x:o.x+o.w*0.5, y:o.y-o.h};
+      return triRectOverlap(A,B,C, pr);
+    }
+    return false;
+  }
+
+  function update(dt){
+    G.time+=dt;
+
+    // плавная смена суток: целевое состояние по уровню
+    const lv = currentLevel();
+    const targetNight = isNightLevel(lv) ? 1 : 0;
+    const transition = dt / 2.0; // 2 секунды
+    nightFactor += (targetNight - nightFactor) * Math.min(1, transition);
+
+    // ускорение
+    G.speed += G.accel*G.speed*dt;
+
+    // события по уровню
+    if(lv !== G.level){ G.level = lv; maybeSpawnChips(); maybeSpawnYelnik(); maybeSpawnOwl(); }
+
+    // игрок
+    player.update(dt);
+
+    // движение полосы
+    for(const o of band){ o.x -= G.speed*dt; }
+    while(band.length && band[0].x + band[0].w < -80) band.shift();
+    ensureBand();
+
+    // параллакс
+    clouds.forEach(c=>{ c.x -= (G.speed*0.1+12)*dt; if(c.x<-140) c.x = BASE.w+140; });
+    layers.forEach((L)=>{ const k=L.speed; L.trees.forEach(t=>{ t.x -= (G.speed*k)*dt; if(t.x<-40) t.x += BASE.w+80; }); });
+
+    // фоновые события (знаки, декор, сова)
+    for(let i=bgEvents.length-1;i>=0;i--){
+      const e = bgEvents[i];
+      if(e.type==='sign' || e.type==='deco'){
+        e.x -= G.speed * (e.speedK||0.8) * dt;
+        if(e.x < -120) bgEvents.splice(i,1);
+      }else if(e.type==='owl'){
+        e.x += e.vx*dt;
+        e.flapT += dt*10; // скорость взмахов
+        if(e.x < -120) bgEvents.splice(i,1);
+      }
+    }
+
+    // звёзды: движение и мерцание (только ночью рисуем, но движение можно обновлять всегда понемногу)
+    stars.forEach(s=>{
+      s.a += s.tw * dt;
+      s.x += s.dx*dt; s.y += s.dy*dt;
+      if(s.x<-20) s.x = BASE.w+20; if(s.x>BASE.w+20) s.x=-20;
+      if(s.y<0) s.y=200; if(s.y>200) s.y=0;
+    });
+
+    // глаза и моргание у леших
+    for(const o of band){
+      if(o.type==='lesh' && o.eye){
+        const dx = (player.x - (o.x + o.w/2));
+        const dy = ((player.y - player.h/2) - (o.y - o.h + 16));
+        const eyeMax = 2.2;
+        let tx = Math.max(-eyeMax, Math.min(eyeMax, dx/80));
+        let ty = Math.max(-eyeMax, Math.min(eyeMax, dy/120));
+        if(player.y < o.y - o.h + 10){ ty = Math.max(ty, -1.6); } // когда перелетаешь — чуть вверх
+        const follow = 7.5;
+        o.eye.vx += (tx - o.eye.vx) * Math.min(1, follow*dt);
+        o.eye.vy += (ty - o.eye.vy) * Math.min(1, follow*dt);
+
+        // моргание
+        o.eye.blinkT -= dt;
+        if(o.eye.blinkT <= 0 && o.eye.blinkDir===0){ o.eye.blinkDir = 1; }
+        if(o.eye.blinkDir!==0){
+          const step = dt / o.eye.dur;
+          o.eye.blink += (o.eye.blinkDir>0 ? step : -step);
+          if(o.eye.blink >= 1){ o.eye.blink = 1; o.eye.blinkDir = -1; }
+          if(o.eye.blink <= 0 && o.eye.blinkDir<0){ o.eye.blink = 0; o.eye.blinkDir = 0; o.eye.blinkT = G.rnd(3,6); }
+        }
+      }
+    }
+
+    // очки/коллизии
+    const p = player.rect();
+    for(let i=band.length-1;i>=0;i--){
+      const o = band[i];
+      if(o.pickup){
+        if(rectRect(p, {x:o.x, y:o.y-o.h, w:o.w, h:o.h})){
+        G.score += o.score;
+player.pickedTimerMax = 0.45;
+player.pickedTimer    = player.pickedTimerMax;
+band.splice(i,1);
+        }
+      }else{
+        if(hitEnemy(p,o)){ gameOver(); return; }
+        if(!o.passed && o.x + o.w < player.x){ o.passed=true; G.score += o.score; }
+      }
+    }
+
+    scoreEl.textContent = G.score;
+    spdEl.textContent = (G.speed/G.baseSpeed).toFixed(1)+'×';
+  }
+
+  /* ---------- рисование ---------- */
+  function drawScene(){
+    ctx.save(); ctx.scale(SCALE.x, SCALE.y);
+
+    // фон: плавная смесь дня/ночи
+    const k = nightFactor;
+    // смешиваем цвета неба
+    const day = hexToRgb(getVar('--sky')||'#eaf7ee'), night = hexToRgb(getVar('--night-sky')||'#0f1f3a');
+    const sky = mixRgb(day, night, k);
+    ctx.fillStyle = `rgb(${sky.r|0},${sky.g|0},${sky.b|0})`;
+    ctx.fillRect(0,0,BASE.w,BASE.h);
+
+    // звёзды — ночью, с мерцанием
+    if(k>0.05){
+      ctx.save();
+      ctx.globalAlpha = k; // силуэт звёзд зависит от ночи
+      stars.forEach(s=>{
+        const tw = (Math.sin(s.a)*0.4+0.6); // 0.2..1.0
+        ctx.globalAlpha = k * (0.4 + 0.6*tw);
+        ctx.fillStyle='#fff';
+        circle(s.x, s.y, s.r);
+      });
+      ctx.restore();
+    }
+
+    // холмы
+    hill(230 + Math.sin(G.time*0.8)*2, mixHex('--hill1', '--night-sky', k), 12, 0.012);
+    hill(260 + Math.cos(G.time*0.7)*2, mixHex('--hill2', '--night-sky', k), 10, 0.017);
+
+    // лес
+    drawLayer(layers[0], mixHex('--treesFar','--night-sky', k*0.5));
+    drawLayer(layers[1], mixHex('--treesMid','--night-sky', k*0.6));
+    drawLayer(layers[2], mixHex('--treesNear','--night-sky', k*0.7));
+
+    // облака — чуть бледнее ночью
+    ctx.globalAlpha = 0.9*(1-k*0.6); ctx.fillStyle='#fff'; for(const c of clouds) cloud(c.x,c.y,40*c.s); ctx.globalAlpha=1;
+
+    // земля
+    ctx.fillStyle=getVar('--ground'); ctx.fillRect(0,G.groundY,BASE.w,BASE.h-G.groundY);
+    ctx.strokeStyle='#b09a71'; ctx.beginPath(); ctx.moveTo(0,G.groundY+.5); ctx.lineTo(BASE.w,G.groundY+.5); ctx.stroke();
+
+    // фоновые события (знаки/декор/сова)
+    for(const e of bgEvents){
+      if(e.type==='sign'){ drawSign(e); }
+      else if(e.type==='deco'){ drawDeco(e); }
+      else if(e.type==='owl'){ drawOwl(e); }
+    }
+
+    // полоса объектов
+    for(const o of band) drawObject(o);
+
+    // игрок
+    player.draw();
+
+    ctx.restore();
+  }
+
+  function hill(y0, colorName, amp, freq){
+    const fillCol = typeof colorName==='string' && colorName.startsWith('#') ? colorName : getVar(colorName);
+    ctx.beginPath(); ctx.moveTo(0, y0);
+    for(let x=0;x<=BASE.w;x+=20) ctx.lineTo(x, y0 + amp*Math.sin((x+G.time*100)*freq));
+    ctx.lineTo(BASE.w, BASE.h); ctx.lineTo(0, BASE.h); ctx.closePath();
+    ctx.fillStyle=fillCol || getVar('--hill1'); ctx.fill();
+  }
+  function drawLayer(L, color){ ctx.fillStyle=color; L.trees.forEach(t=> treeSilhouette(t.x, G.groundY, 40, t.h)); }
+  function treeSilhouette(x,y,w,h){
+    ctx.fillRect(x-4, y-h, 8, h);
+    ctx.beginPath(); ctx.moveTo(x, y-h-10); ctx.lineTo(x-22, y-h+24); ctx.lineTo(x+22, y-h+24); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x, y-h+10); ctx.lineTo(x-28, y-h+48); ctx.lineTo(x+28, y-h+48); ctx.closePath(); ctx.fill();
+  }
+  function cloud(x,y,s){ circle(x, y, s); circle(x+s, y+5, s*0.75); circle(x-s, y+6, s*0.7); circle(x, y+12, s*0.6); }
+
+function drawBottle(x, y, s){
+  ctx.save(); ctx.translate(x, y);
+  // Тело
+  ctx.fillStyle='#2f6f3a';
+  roundRect(-s*0.35, -s*0.85, s*0.7, s*1.05, 4, true);
+  // Горлышко — выше и длиннее
+  ctx.fillStyle='#24552c';
+  roundRect(-s*0.12, -s*1.20, s*0.24, s*0.35, 3, true);
+  // Блик
+  ctx.fillStyle='rgba(255,255,255,.35)';
+  roundRect(-s*0.28, -s*0.78, s*0.18, s*0.55, 4, true);
+  // Этикетка — ближе к горлышку
+  ctx.fillStyle='#d8c48a';
+  roundRect(-s*0.24, -s*0.52, s*0.48, s*0.26, 4, true);
+  ctx.restore();
+}
+  function drawChips(x,y){ ctx.save(); ctx.translate(x,y);
+    ctx.fillStyle='#e23d2d'; roundRect(-14, -26, 28, 32, 6, true);
+    ctx.fillStyle='#ffd54d'; roundRect(-10, -10, 20, 12, 4, true);
+    ctx.restore();
+  }
+
+  function drawObject(o){
+    if(o.type==='root'){
+      ctx.fillStyle='#4b3621'; triangle(o.x, o.y, o.w, o.h);
+      ctx.fillStyle='#2f2417'; ctx.fillRect(o.x, o.y-6, o.w, 6);
+      ctx.fillStyle='rgba(255,255,255,.15)'; triangle(o.x+o.w*0.25, o.y-2, o.w*0.2, o.h*0.45);
+    } else if(o.type==='lesh'){
+      const faceSkin = '#f3d7ad';
+      ctx.fillStyle='#2d512d'; roundRect(o.x, o.y-o.h, o.w, o.h, 8, true);
+      ctx.fillStyle='#3b6b3b'; roundRect(o.x+4, o.y-o.h+o.h*0.55, o.w-8, o.h*0.4, 8, true);
+      ctx.fillStyle=faceSkin;  roundRect(o.x+8, o.y-o.h+8, o.w-16, 18, 8, true);
+
+      const eyeL = {x:o.x+14, y:o.y-o.h+16}; const eyeR = {x:o.x+o.w-14, y:o.y-o.h+16};
+      ctx.fillStyle='#fff'; circle(eyeL.x, eyeL.y, 4); circle(eyeR.x, eyeR.y, 4);
+      const ex = o.eye ? o.eye.vx : 0, ey = o.eye ? o.eye.vy : 0;
+      ctx.fillStyle='#222'; circle(eyeL.x + ex, eyeL.y + ey, 2); circle(eyeR.x + ex, eyeR.y + ey, 2);
+      if(o.eye){
+        const b=o.eye.blink;
+        if(b>0){ ctx.fillStyle = faceSkin; const h=8*b;
+          roundRect(eyeL.x-4, eyeL.y-4, 8, h, 2, true);
+          roundRect(eyeR.x-4, eyeR.y-4, 8, h, 2, true);
+        }
+      }
+      ctx.fillStyle='#4f8a4f'; circle(o.x+10, o.y-o.h+30, 3); circle(o.x+o.w-10, o.y-o.h+28, 3);
+    } else if(o.type==='trap'){
+      ctx.fillStyle='#666'; roundRect(o.x, o.y-o.h, o.w, o.h, 6, true);
+      ctx.fillStyle='#222'; for(let i=0;i<6;i++){ triangle(o.x+6+i*8, o.y-6, 6, 12); }
+      ctx.fillStyle='#444'; circle(o.x+o.w*0.5, o.y-o.h+6, 4);
+    } else if(o.type==='bottle'){
+      drawBottle(o.x, o.y, 20);
+    } else if(o.type==='chips'){
+      drawChips(o.x+o.w/2, o.y-10);
+    }
+  }
+
+  /* ---------- фоновые элементы ---------- */
+ function drawSign(e){
+  const w = 120, h = 34, r = 6;
+  const poleW = 8;
+
+  // табличка в локальных координатах
+  ctx.save();
+  ctx.translate(e.x, G.groundY);
+
+  // шест: ЧУТЬ левее центра (на 2px)
+  const poleX = (w*0.5 - 2) - poleW/2;
+  ctx.fillStyle = '#6b4a32';
+  roundRect(poleX, -40, poleW, 40, 4, true);
+
+  // доска
+  ctx.fillStyle = '#7d5a3f';
+  roundRect(0, -72, w, h, r, true);
+
+  // потёртости
+  ctx.fillStyle='rgba(255,255,255,0.08)'; roundRect(6, -68, w-12, 6, 3, true);
+  ctx.fillStyle='rgba(0,0,0,0.08)';       roundRect(10,-54, w-20, 4, 3, true);
+
+  // заклёпки
+  ctx.fillStyle='#3f2b1e'; circle(10,-55,2.2); circle(w-10,-55,2.2);
+
+  // текст
+  const text = 'Ельник';
+  ctx.font = `900 ${Math.max(14, 16*SCALE.x)}px system-ui,Arial`;
+  ctx.textBaseline='middle'; ctx.textAlign='left';
+  ctx.lineWidth = 3; ctx.strokeStyle = '#2b1b10';
+  ctx.strokeText(text, 14, -55);
+  ctx.fillStyle = '#f2e4c8';
+  ctx.fillText(text, 14, -55);
+
+  // стрелка вправо
+  ctx.fillStyle = '#f2e4c8';
+  ctx.beginPath();
+  const ax = w-38, ay = -55;
+  ctx.moveTo(ax, ay-8); ctx.lineTo(ax+16, ay); ctx.lineTo(ax, ay+8);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#2b1b10'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.restore();
+}
+function drawDeco(e){
+  if(e.deco==='stone'){
+    ctx.fillStyle='#8d8b86'; roundRect(e.x, e.y-10, 18, 10, 4, true);
+    ctx.fillStyle='#76736f'; roundRect(e.x+6, e.y-8, 8, 4, 2, true);
+  } else if(e.deco==='mush'){
+    ctx.fillStyle='#d34a3a'; roundRect(e.x, e.y-12, 12, 8, 4, true);
+    ctx.fillStyle='#fff'; circle(e.x+3, e.y-9, 1.2); circle(e.x+8, e.y-10, 1.1);
+    ctx.fillStyle='#a07b4a'; roundRect(e.x+4, e.y-8, 4, 6, 2, true);
+  } else if(e.deco==='grass'){
+    // три травинки
+    ctx.strokeStyle='#4b7f4b'; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y);     ctx.quadraticCurveTo(e.x-4, e.y-10, e.x-2, e.y-16);
+    ctx.moveTo(e.x+6, e.y);   ctx.quadraticCurveTo(e.x+8, e.y-10, e.x+6, e.y-16);
+    ctx.moveTo(e.x+12, e.y);  ctx.quadraticCurveTo(e.x+10, e.y-10, e.x+12, e.y-15);
+    ctx.stroke();
+  }
+}
+
+  function drawOwl(e){
+    // тело
+    ctx.save();
+    ctx.globalAlpha = 0.9*nightFactor;
+    ctx.translate(e.x, e.y);
+    ctx.fillStyle = '#7a6a55'; roundRect(-14, -10, 28, 20, 8, true);
+    // глаза
+    ctx.fillStyle='#fff'; circle(-5, -2, 3.2); circle(5, -2, 3.2);
+    ctx.fillStyle='#222'; circle(-5, -2, 1.4); circle(5, -2, 1.4);
+    // клюв
+    ctx.fillStyle='#caa14a'; triangle(-2, 2, 4, 6);
+    // крылья (взмахи)
+    const flap = Math.sin(e.flapT)*6;
+    ctx.fillStyle='#6b5c49';
+    // левое
+    ctx.beginPath(); ctx.moveTo(-14, -2);
+    ctx.quadraticCurveTo(-22, -8-flap, -28, -2);
+    ctx.quadraticCurveTo(-20, 6+flap, -14, -2); ctx.fill();
+    // правое
+    ctx.beginPath(); ctx.moveTo(14, -2);
+    ctx.quadraticCurveTo(22, -8-flap, 28, -2);
+    ctx.quadraticCurveTo(20, 6+flap, 14, -2); ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------- цветовые утилиты ---------- */
+  function hexToRgb(hex){
+    const h = hex.trim().replace('#','');
+    const n = parseInt(h.length===3? h.split('').map(c=>c+c).join(''):h,16);
+    return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 };
+  }
+  function mixRgb(a,b,k){ return { r:a.r+(b.r-a.r)*k, g:a.g+(b.g-a.g)*k, b:a.b+(b.b-a.b)*k }; }
+  function mixHex(varDay, varNight, k){
+    const d = hexToRgb(getVar(varDay)||'#ffffff'); const n = hexToRgb(getVar(varNight)||'#000000');
+    const m = mixRgb(d,n,k); return `rgb(${m.r|0},${m.g|0},${m.b|0})`;
+  }
+
+  /* ---------- показать старт ---------- */
+  startOv.style.display='flex';
+})();
+</script>
+</body>
+</html>
